@@ -74,16 +74,30 @@ class xLSTMBlock(nn.Module):
         self.reset_parameters()
 
     def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
-        x = x + self.xlstm(self.xlstm_norm(x), **kwargs)
+        residual = x
+        x = self.xlstm_norm(x)
+        xlstm_out = self.xlstm(x, **kwargs)
+
+        if isinstance(xlstm_out, tuple):
+            x, state = xlstm_out
+        else:
+            x, state = xlstm_out, None
+        
+        x = residual + x
+
         if self.ffn is not None:
-            x = x + self.ffn(self.ffn_norm(x), **kwargs)
-        return x
+            x = x + self.ffn(self.ffn_norm(x))
+        
+        if state is not None:
+            return x, state
+        else:
+            return x
 
     def step(self, x: torch.Tensor, **kwargs) -> tuple[torch.Tensor, dict[str, tuple[torch.Tensor, ...]]]:
         x_xlstm, xlstm_state = self.xlstm.step(self.xlstm_norm(x), **kwargs)
         x = x + x_xlstm
         if self.ffn is not None:
-            x = x + self.ffn(self.ffn_norm(x), **kwargs)
+            x = x + self.ffn(self.ffn_norm(x))
         return x, xlstm_state
 
     def reset_parameters(self) -> None:

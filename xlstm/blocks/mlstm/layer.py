@@ -21,12 +21,12 @@ class mLSTMLayerConfig(UpProjConfigMixin):
     qkv_proj_blocksize: int = 4
     num_heads: int = 4
     proj_factor: float = 2.0
+    chunk_size: int = 256
 
     # will be set toplevel config
     embedding_dim: int = -1
     bias: bool = False
     dropout: float = 0.0
-    context_length: int = -1
 
     _num_blocks: int = 1
     _inner_embedding_dim: int = None
@@ -81,9 +81,9 @@ class mLSTMLayer(nn.Module):
         self.conv_act_fn = nn.SiLU()
         self.mlstm_cell = mLSTMCell(
             config=mLSTMCellConfig(
-                context_length=self.config.context_length,
                 embedding_dim=self.config._inner_embedding_dim,
                 num_heads=self.config.num_heads,
+                chunk_size=self.config.chunk_size,
             )
         )
         self.ogate_act_fn = nn.SiLU()
@@ -100,20 +100,35 @@ class mLSTMLayer(nn.Module):
 
     def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
         B, S, _ = x.shape
+        return_last_state = kwargs.get("return_last_state", False)
+        conv_state = kwargs.get("conv_state", None)
 
         # up-projection
         x_inner = self.proj_up(x)
         x_mlstm, z = torch.split(x_inner, split_size_or_sections=self.config._inner_embedding_dim, dim=-1)
 
         # mlstm branch
-        x_mlstm_conv = self.conv1d(x_mlstm)
+        if self.config.conv1d_kernel_size > 0:
+            if return_last_state:
+                x_mlstm_conv, conv_state = self.conv1d(x_mlstm, conv_state=conv_state, return_last_state=True)
+            else:
+                x_mlstm_conv = self.conv1d(x_mlstm, conv_state=conv_state, return_last_state=False)
+        else:
+            x_mlstm_conv = x_mlstm
+
         x_mlstm_conv_act = self.conv_act_fn(x_mlstm_conv)
 
         q = self.q_proj(x_mlstm_conv_act)
         k = self.k_proj(x_mlstm_conv_act)
         v = self.v_proj(x_mlstm)
 
-        h_tilde_state = self.mlstm_cell(q=q, k=k, v=v)
+        mlstm_cell_output = self.mlstm_cell(q=q, k=k, v=v, **kwargs)
+
+        if return_last_state:
+            h_tilde_state, mlstm_state = mlstm_cell_output
+        else:
+            h_tilde_state = mlstm_cell_output
+            mlstm_state = None
 
         h_tilde_state_skip = h_tilde_state + (self.learnable_skip * x_mlstm_conv_act)
 
@@ -122,6 +137,9 @@ class mLSTMLayer(nn.Module):
 
         # down-projection
         y = self.dropout(self.proj_down(h_state))
+
+        if return_last_state:
+            return y, {"mlstm_state": mlstm_state, "conv_state": conv_state}
         return y
 
     def step(

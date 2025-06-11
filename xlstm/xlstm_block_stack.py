@@ -17,7 +17,6 @@ class xLSTMBlockStackConfig:
     mlstm_block: Optional[mLSTMBlockConfig] = None
     slstm_block: Optional[sLSTMBlockConfig] = None
 
-    context_length: int = -1
     num_blocks: int = 1
     embedding_dim: int = 128
     add_post_blocks_norm: bool = True
@@ -59,7 +58,6 @@ class xLSTMBlockStackConfig:
             self.mlstm_block.mlstm.embedding_dim = self.embedding_dim
             self.mlstm_block.mlstm.bias = self.bias
             self.mlstm_block.mlstm.dropout = self.dropout
-            self.mlstm_block.mlstm.context_length = self.context_length
             
             self.mlstm_block._num_blocks = self.num_blocks
             # call post init, for setting inner_embedding_dim
@@ -114,14 +112,36 @@ class xLSTMBlockStack(nn.Module):
         if not isinstance(self.post_blocks_norm, nn.Identity):
             self.post_blocks_norm.reset_parameters()
 
-    def forward(self, x: torch.Tensor, **kwargs) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        state: Optional[dict[str, dict]] = None,
+        return_last_state: bool = False,
+    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict]]:
+        if state is None:
+            state = {}
 
-        for block in self.blocks:
-            x = block(x, **kwargs)
+        new_state = {}
+
+        for block_idx, block in enumerate(self.blocks):
+            block_state = state.get(f"block_{block_idx}", {})
+            output = block(x, return_last_state=return_last_state, **block_state)
+
+            if return_last_state:
+                if isinstance(output, tuple):
+                    x, new_block_state = output
+                    new_state[f"block_{block_idx}"] = new_block_state
+                else:
+                    x = output
+            else:
+                x = output
 
         x = self.post_blocks_norm(x)
 
-        return x
+        if return_last_state:
+            return x, new_state
+        else:
+            return x
 
     def step(
         self, x: torch.Tensor, state: dict[str, dict[str, tuple[torch.Tensor, ...]]] = None

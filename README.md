@@ -190,6 +190,29 @@ y = xlstm_stack(x)
 y.shape == x.shape
 ```
 
+#### Stateful Forward Pass
+The `xLSTMBlockStack` supports stateful forward passes, which is useful for processing long sequences in chunks. To enable statefulness, set `return_last_state=True` in the forward call. This will return the hidden state, which can then be passed to the next forward call.
+
+Here is an example of how to process a sequence in two chunks:
+```python
+# Process the whole sequence at once for comparison
+y_full, state_full = xlstm_stack(x, return_last_state=True)
+
+# Process in two chunks
+seq_len = x.shape[1]
+x1 = x[:, :seq_len//2, :]
+x2 = x[:, seq_len//2:, :]
+
+y1_chunk, state1 = xlstm_stack(x1, return_last_state=True)
+y2_chunk, state2 = xlstm_stack(x2, state=state1, return_last_state=True)
+
+# Concatenate results from chunked processing
+y_chunkwise = torch.cat([y1_chunk, y2_chunk], dim=1)
+
+# The concatenated output should be very close to the full pass output
+assert torch.allclose(y_full, y_chunkwise, atol=1e-5)
+```
+
 If you are working with yaml strings / files for configuration you can also use dacite to create the config dataclasses. This is the same as the snippet above:
 
 ```python

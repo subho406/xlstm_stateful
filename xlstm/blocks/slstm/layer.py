@@ -129,7 +129,6 @@ class sLSTMLayer(nn.Module):
         **kwargs,
     ) -> torch.Tensor:
         B, S, _ = x.shape
-
         if self.config.conv1d_kernel_size > 0:
             if return_last_state:
                 x_conv, conv_state = self.conv1d(
